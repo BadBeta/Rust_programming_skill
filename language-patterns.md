@@ -102,7 +102,7 @@ impl AsRef<User> for Admin {
 
 | Section | Topics |
 |---------|--------|
-| [Pattern Matching (Extended)](#pattern-matching-extended) | Match ergonomics, exhaustive matching, if-let chains, let-else, matches!, destructuring, or-patterns |
+| [Pattern Matching (Extended)](#pattern-matching-extended) | Match ergonomics, exhaustive matching, if-let chains, let-else, matches!, destructuring, or-patterns, tuple matching (smoltcp), range patterns (rustc lexer), ref/ref mut (tokio), const matching (SLIP protocol), BAD/GOOD mistakes |
 | [Ownership & Borrowing Patterns](#ownership--borrowing-patterns) | Borrow splitting, temporary borrow scoping, Cow\<T\>, zero-copy, entry API |
 | [The ? Operator & Error Chains](#the--operator--error-chains) | ? chaining, adding context, error conversion across layers, fallible iterators |
 | [Iterator Composition](#iterator-composition-extended) | Adaptor chaining, custom iterators, IntoIterator, lazy evaluation |
@@ -311,6 +311,280 @@ for item in &items {
 match &some_string {
     s if s.starts_with("http") => fetch_url(s),
     s => read_file(s),
+}
+```
+
+### Tuple Matching for Multi-Value Dispatch
+
+Match on tuples of values for state machines, protocol handlers, and multi-value dispatch. Production pattern from smoltcp (TCP/IP stack) and ripgrep:
+
+```rust
+// State machine — match (state, event) pairs
+// Pattern: smoltcp TCP socket processes (state, control_flag) pairs
+enum State { Idle, Connecting, Connected, Closing }
+enum Event { Connect, Data(Vec<u8>), Disconnect, Timeout }
+
+fn transition(state: State, event: Event) -> (State, Vec<Action>) {
+    match (state, event) {
+        (State::Idle, Event::Connect) => {
+            (State::Connecting, vec![Action::SendSyn])
+        }
+        (State::Connecting, Event::Data(_)) => {
+            (State::Connected, vec![Action::SendAck])
+        }
+        (State::Connected, Event::Data(payload)) => {
+            (State::Connected, vec![Action::Process(payload), Action::SendAck])
+        }
+        (State::Connected, Event::Disconnect) => {
+            (State::Closing, vec![Action::SendFin])
+        }
+        // Wildcard for any state receiving Timeout
+        (_, Event::Timeout) => {
+            (State::Idle, vec![Action::Reset])
+        }
+        // No-op transitions
+        (state, _) => (state, vec![]),
+    }
+}
+
+// Matching on two Option values — ripgrep sort ordering pattern
+// Source: ripgrep/crates/core/flags/hiargs.rs
+fn compare_optional(a: Option<u64>, b: Option<u64>) -> Ordering {
+    match (a, b) {
+        (Some(a), Some(b)) => a.cmp(&b),
+        (Some(_), None) => Ordering::Less,     // Present before absent
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+// Triple match — smoltcp matches (state, control, ack) in TCP processing
+// Source: smoltcp/src/socket/tcp.rs
+match (self.state, repr.control, repr.ack_number) {
+    (State::SynSent, TcpControl::Rst, None) => { /* reject */ }
+    (State::SynSent, TcpControl::Rst, Some(ack)) if ack == expected => { /* accept */ }
+    (_, TcpControl::Rst, _) => { /* any RST with valid seq */ }
+    (State::Listen, TcpControl::Syn, None) => { /* new connection */ }
+    // ...
+}
+```
+
+### Range Patterns
+
+Match on numeric and character ranges. Common in parsers, lexers, and protocol handlers:
+
+```rust
+// Character classification — rustc lexer uses this pattern
+// Source: compiler/rustc_lexer/src/lib.rs
+let token_kind = match first_char {
+    c @ '0'..='9' => {
+        let kind = self.number(c);
+        TokenKind::Literal { kind, suffix_start: self.pos() }
+    }
+    'a'..='z' | 'A'..='Z' | '_' => self.identifier(),
+    _ => TokenKind::Unknown,
+};
+
+// Tag/attribute name parsing — robinson HTML parser
+// Source: mbrubeck/robinson/src/html.rs
+fn parse_name(input: &str) -> String {
+    input.chars()
+        .take_while(|c| matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9'))
+        .collect()
+}
+
+// Byte-level parsing — common in binary protocols and hex decoders
+fn decode_hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+// HTTP status code classification
+fn status_category(code: u16) -> &'static str {
+    match code {
+        100..=199 => "informational",
+        200..=299 => "success",
+        300..=399 => "redirection",
+        400..=499 => "client error",
+        500..=599 => "server error",
+        _ => "unknown",
+    }
+}
+```
+
+### `ref` and `ref mut` in Patterns
+
+Control borrowing explicitly in match arms — needed when matching on owned enums but wanting to borrow contents rather than move them. Production pattern from tokio:
+
+```rust
+// tokio's blocking I/O uses ref mut to modify state enum contents in place
+// Source: tokio/src/io/blocking.rs
+enum State {
+    Idle(Option<Buf>),
+    Busy(Receiver<(io::Result<usize>, Buf)>),
+}
+
+fn poll_read(&mut self, cx: &mut Context<'_>, dst: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+    loop {
+        match self.state {
+            State::Idle(ref mut buf_cell) => {
+                // ref mut lets us modify the Option inside without moving out of self.state
+                let mut buf = buf_cell.take().unwrap();
+                if !buf.is_empty() {
+                    buf.copy_to(dst);
+                    *buf_cell = Some(buf);
+                    return Poll::Ready(Ok(()));
+                }
+                // Transition to Busy...
+            }
+            State::Busy(ref mut rx) => {
+                let (result, buf) = ready!(Pin::new(rx).poll(cx))?;
+                self.state = State::Idle(Some(buf));
+                return Poll::Ready(result);
+            }
+        }
+    }
+}
+
+// ref to borrow from a match without moving (pre-ergonomics or when explicit)
+match &event {
+    Event::Message { sender, body, .. } => {
+        log::info!("Message from {sender}: {body}");
+    }
+    Event::Error(ref e) => {
+        // ref achieves the same as matching on &event — borrows e
+        log::error!("Error: {e}");
+    }
+    _ => {}
+}
+```
+
+### Matching on Constants
+
+Use `const` values as match arms for protocol bytes, magic numbers, and named sentinel values. Clean alternative to matching on raw literals:
+
+```rust
+// SLIP protocol framing — named constants as match patterns
+// Source: knurling-rs/nrfdfu-rs/src/slip.rs
+const END: u8 = 0xC0;
+const ESC: u8 = 0xDB;
+const ESC_END: u8 = 0xDC;
+const ESC_ESC: u8 = 0xDD;
+
+fn encode_frame(buf: &[u8], writer: &mut impl Write) -> io::Result<()> {
+    for &byte in buf {
+        match byte {
+            END => writer.write_all(&[ESC, ESC_END])?,
+            ESC => writer.write_all(&[ESC, ESC_ESC])?,
+            _ => writer.write_all(&[byte])?,
+        }
+    }
+    writer.write_all(&[END])
+}
+
+fn decode_byte(bytes: &mut impl Iterator<Item = io::Result<u8>>) -> io::Result<Option<u8>> {
+    match next_byte(bytes)? {
+        ESC => match next_byte(bytes)? {
+            ESC_ESC => Ok(Some(ESC)),
+            ESC_END => Ok(Some(END)),
+            invalid => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid escape: 0x{invalid:02x}"),
+            )),
+        },
+        END => Ok(None),  // Frame complete
+        other => Ok(Some(other)),
+    }
+}
+
+// Also works with associated constants and string constants
+impl HttpMethod {
+    const GET: &str = "GET";
+    const POST: &str = "POST";
+    const PUT: &str = "PUT";
+    const DELETE: &str = "DELETE";
+}
+
+fn parse_method(s: &str) -> Option<HttpMethod> {
+    match s {
+        HttpMethod::GET => Some(HttpMethod::Get),
+        HttpMethod::POST => Some(HttpMethod::Post),
+        HttpMethod::PUT => Some(HttpMethod::Put),
+        HttpMethod::DELETE => Some(HttpMethod::Delete),
+        _ => None,
+    }
+}
+```
+
+### Pattern Matching Mistakes (BAD/GOOD)
+
+```rust
+// BAD: Wildcard hides missing match arms — new variants silently ignored
+enum Command { Start, Stop, Pause, Resume }
+fn handle(cmd: Command) {
+    match cmd {
+        Command::Start => start(),
+        Command::Stop => stop(),
+        _ => {}  // Pause and Resume silently do nothing — bug if unintentional
+    }
+}
+
+// GOOD: Explicit match arms — compiler catches new variants
+fn handle(cmd: Command) {
+    match cmd {
+        Command::Start => start(),
+        Command::Stop => stop(),
+        Command::Pause => {}   // Intentionally no-op (explicit)
+        Command::Resume => {}  // Intentionally no-op (explicit)
+    }
+}
+
+// BAD: match where if-let or let-else suffices
+fn get_name(user: Option<&User>) -> String {
+    match user {
+        Some(u) => u.name.clone(),
+        None => "anonymous".to_string(),
+    }
+}
+
+// GOOD: map_or for simple transformation
+fn get_name(user: Option<&User>) -> String {
+    user.map_or_else(|| "anonymous".to_string(), |u| u.name.clone())
+}
+
+// BAD: forgetting match is an expression — assigning in each arm
+let msg;
+match status {
+    Status::Ok => msg = "success",
+    Status::Err => msg = "failure",
+}
+
+// GOOD: match IS an expression — bind directly
+let msg = match status {
+    Status::Ok => "success",
+    Status::Err => "failure",
+};
+
+// BAD: matching String when &str works — forces allocation or ownership
+fn classify(input: String) -> Category {
+    match input.as_str() {  // Needs .as_str() because match arms are &str
+        "error" => Category::Error,
+        "warn" => Category::Warning,
+        _ => Category::Info,
+    }
+}
+
+// GOOD: take &str from the start — no allocation needed
+fn classify(input: &str) -> Category {
+    match input {
+        "error" => Category::Error,
+        "warn" => Category::Warning,
+        _ => Category::Info,
+    }
 }
 ```
 
