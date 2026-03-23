@@ -1651,6 +1651,32 @@ impl SearchWorkerBuilder {
 // builder.search_zip(true); builder.preprocessor(cmd)?; let worker = builder.build();
 ```
 
+### Composable Query/Filter Pattern
+
+Common in search engines (tantivy), query builders, and filter systems — compose trait objects into boolean/logical trees:
+
+```rust
+// Collect heterogeneous query types via trait objects, combine with boolean logic
+use std::fmt::Debug;
+
+trait Query: Debug { fn matches(&self, doc: &Document) -> bool; }
+
+// Build query clauses dynamically from user input
+let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+
+for field in &search_fields {
+    let query = FuzzyTermQuery::new(field, &text, distance);
+    clauses.push((Occur::Should, Box::new(query)));  // OR semantics
+}
+if let Some(filter) = category_filter {
+    clauses.push((Occur::Must, Box::new(ExactQuery::new("category", filter))));
+}
+
+let combined = BooleanQuery::new(clauses);
+// This is Strategy + Composite via trait objects — each clause is independent,
+// BooleanQuery composes them with AND/OR/NOT semantics (Occur::Must/Should/MustNot)
+```
+
 ### Newtype Pattern
 
 ```rust
