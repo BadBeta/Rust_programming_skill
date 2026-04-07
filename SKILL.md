@@ -2201,6 +2201,22 @@ static SHARD_COUNT: OnceLock<usize> = OnceLock::new();
 let count = *SHARD_COUNT.get_or_init(|| {
     std::thread::available_parallelism().map_or(4, |n| n.get() * 4)
 });
+
+// OnceLock for tokio runtime in NIF/FFI contexts — the critical pattern
+// LazyLock won't work here because Runtime::new() can fail
+static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+fn init_runtime() -> Result<(), String> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    RUNTIME.set(rt).map_err(|_| "runtime already initialized".into())
+}
+
+fn use_runtime() -> &'static tokio::runtime::Runtime {
+    RUNTIME.get().expect("runtime not initialized — call init_runtime first")
+}
 ```
 
 ### String Operations

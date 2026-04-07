@@ -2510,6 +2510,71 @@ async fn read_file(path: &str) -> std::io::Result<String> {
 }
 ```
 
+### Runtime Owned by Non-Async Host (NIF/FFI Pattern)
+
+When Rust is embedded in a non-async host (BEAM VM via NIFs, Python via PyO3, C via FFI), the host controls threading. The tokio runtime must be explicitly managed:
+
+```rust
+use std::sync::OnceLock;
+use tokio::runtime::Runtime;
+
+static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+
+// Called once during library initialization
+fn init() -> Result<(), String> {
+    let rt = Runtime::new().map_err(|e| e.to_string())?;
+    RUNTIME.set(rt).map_err(|_| "already initialized".into())
+}
+```
+
+**Three ways to use the runtime from sync code:**
+
+| Method | Use when | Blocks caller? | Example |
+|--------|----------|----------------|---------|
+| `runtime.enter()` | Need tokio context for constructing async objects (quinn, mDNS) but NOT running futures | No | `let _guard = rt.enter(); quinn::Endpoint::new(...)?;` |
+| `runtime.block_on(future)` | Need to run a future to completion synchronously | Yes — blocks thread | `let result = rt.block_on(async { client.get(url).await });` |
+| `runtime.spawn(future)` | Fire-and-forget async work from sync context | No | `rt.spawn(async move { process(data).await });` |
+
+```rust
+// runtime.enter() — establishes reactor context WITHOUT running a future
+// Use in NIF/FFI constructors that build async-dependent objects
+fn create_endpoint(config: &Config) -> Result<Endpoint, Error> {
+    let rt = RUNTIME.get().expect("runtime not initialized");
+    let _guard = rt.enter();  // quinn, mDNS, etc. can now find the reactor
+    Endpoint::new(config)     // Synchronous construction that needs reactor context
+}
+
+// runtime.block_on() — runs a future to completion, blocking the calling thread
+// Use in DirtyCpu/DirtyIo NIFs where you need the async result
+fn fetch_data(url: &str) -> Result<Vec<u8>, Error> {
+    let rt = RUNTIME.get().expect("runtime not initialized");
+    rt.block_on(async {
+        reqwest::get(url).await?.bytes().await.map(|b| b.to_vec())
+    })
+}
+
+// runtime.spawn() — fire-and-forget async work
+// Use for event loops, background processing
+fn start_event_loop(handle: Arc<Handle>) {
+    let rt = RUNTIME.get().expect("runtime not initialized");
+    rt.spawn(async move {
+        handle.run_loop().await;
+    });
+}
+```
+
+**`catch_unwind` at FFI boundaries:**
+```rust
+// Panics across FFI boundaries are undefined behavior.
+// Always catch at the boundary.
+fn nif_entry_point(args: Args) -> Result<Value, Error> {
+    std::panic::catch_unwind(|| {
+        do_work(args)
+    })
+    .unwrap_or_else(|_| Err(Error::from("internal panic")))
+}
+```
+
 ### Message-Passing Bridge Pattern
 
 ```rust

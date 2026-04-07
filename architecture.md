@@ -2091,6 +2091,30 @@ These principles hold at every scale:
 
 **The progression is additive.** Add modules, then traits, then crates as needed. Never restructure the fundamentals.
 
+### Rust as Embedded Library (NIF/FFI Architecture)
+
+When Rust is used as an embedded library (Rustler NIFs, PyO3, C FFI), the standard web architecture doesn't apply:
+
+- **No HTTP layer** — the host language handles networking
+- **No domain layer** — domain logic lives in the host language
+- **Composition root is `rustler::init!`** (or `#[pymodule]`, `extern "C"` exports)
+- **State lives in `OnceLock<T>` or `ResourceArc<T>`**, not in application state
+- **Threading is controlled by the host** — dirty schedulers (BEAM), GIL release (Python)
+
+**Architecture for NIF crates:**
+```
+src/
+├── lib.rs          # rustler::init!, NIF function thin wrappers
+├── types.rs        # NifStruct/NifMap/NifTaggedEnum definitions
+├── runtime.rs      # OnceLock<Runtime>, init/shutdown
+├── commands.rs     # Command enum, command handler
+└── core/           # Pure Rust logic (testable without NIF)
+    ├── mod.rs
+    └── ...
+```
+
+**Key principle:** NIF functions are thin wrappers. Keep business logic in `core/` — testable with `cargo test`, no Rustler dependency.
+
 ## Inter-Component Communication
 
 How components talk to each other is a critical architectural decision in Rust. Unlike BEAM/Elixir where processes and message passing are built-in, Rust requires explicit choices about communication mechanisms.
