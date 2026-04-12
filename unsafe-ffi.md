@@ -2546,10 +2546,55 @@ mod tests {
 | **Use Cursor for in-memory streams** | Clean Read/Write interface for byte buffers |
 | **Test with property-based testing** | Ensure roundtrip serialization works |
 
+## AbortIfPanic Guard Pattern (rayon Pattern)
+
+When unsafe code must not unwind (e.g., after partial state mutation that would leave corrupted data), use a drop guard that aborts on panic:
+
+```rust
+/// RAII guard that aborts the process if dropped during a panic.
+/// Use in unsafe contexts where unwinding would leave corrupted state.
+pub(crate) struct AbortIfPanic;
+
+impl Drop for AbortIfPanic {
+    fn drop(&mut self) {
+        // If we're being dropped due to a panic, the state is corrupted.
+        // Abort rather than leave the process in an inconsistent state.
+        eprintln!("detected unexpected panic in critical section; aborting");
+        std::process::abort();
+    }
+}
+
+// Usage pattern: create guard, do unsafe work, forget guard on success
+fn execute_job(job: &Job) {
+    let guard = AbortIfPanic;
+
+    // Do unsafe work that must not be interrupted by unwinding
+    unsafe {
+        // ... critical section that modifies shared state ...
+        job.run();
+    }
+
+    // If we get here, the operation succeeded — disarm the guard
+    std::mem::forget(guard);
+}
+```
+
+**How rayon uses this:** In `StackJob::execute`, the guard ensures that if the job's closure panics AND the subsequent latch-setting code also panics, the process aborts rather than leaving the work-stealing queue in a corrupted state.
+
+**When to use:**
+- Job/task execution systems where panic during cleanup would corrupt shared state
+- Lock-free algorithms where partial mutation + unwind = data corruption
+- FFI boundaries where Rust panic unwinding into C is UB
+
+**When NOT to use:**
+- Normal error handling — use `Result` and `?`
+- Recoverable panics — use `std::panic::catch_unwind` instead
+- Single-threaded code without shared mutable state
+
 ## Related Skills
 
 - **[SKILL.md](SKILL.md)** — Core Rust: ownership, lifetimes, smart pointers, Send/Sync traits
-- **[testing.md](testing.md)** — Miri testing, property-based testing for roundtrip serialization
+- **[testing.md](testing.md)** — Miri testing, loom model checking, property-based testing for roundtrip serialization
 - **[services.md](services.md)** — TCP/TLS networking, binary protocol framing
 - **[architecture.md](architecture.md)** — Safe API design patterns, encapsulation boundaries
 - **[type-system.md](type-system.md)** — Pin/Unpin internals, type state for safety

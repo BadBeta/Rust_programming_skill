@@ -481,6 +481,82 @@ async fn create_user(
 }
 ```
 
+### Rejection Pattern (Extractor Error Handling)
+
+Axum's core design: **extraction failures are responses, not errors.** Every extractor's `Rejection` type implements `IntoResponse`, automatically becoming an HTTP error response. This is the idiomatic way to handle extraction failures.
+
+```rust
+use axum::{
+    extract::{FromRequestParts, rejection::JsonRejection},
+    http::{request::Parts, StatusCode},
+    response::{IntoResponse, Response},
+    Json,
+};
+
+// Custom rejection type — wraps axum's built-in rejections with your error format
+pub struct ApiJsonRejection(JsonRejection);
+
+impl IntoResponse for ApiJsonRejection {
+    fn into_response(self) -> Response {
+        // Convert axum's default rejection into your API's error format
+        let status = self.0.status();
+        let body = serde_json::json!({
+            "error": "invalid_request",
+            "message": self.0.body_text(),
+        });
+        (status, Json(body)).into_response()
+    }
+}
+
+// Use Result<Json<T>, JsonRejection> in handlers to intercept extraction failures
+async fn create_user(
+    result: Result<Json<CreateUserInput>, JsonRejection>,
+) -> Result<Json<UserResponse>, ApiJsonRejection> {
+    let Json(input) = result.map_err(ApiJsonRejection)?;
+    // ... process input
+    todo!()
+}
+```
+
+**Defining custom rejections with macros (axum-core pattern):**
+
+```rust
+// For simple rejection types with fixed status + message
+pub struct MissingApiKey;
+
+impl IntoResponse for MissingApiKey {
+    fn into_response(self) -> Response {
+        (StatusCode::UNAUTHORIZED, "Missing API key").into_response()
+    }
+}
+
+impl std::fmt::Display for MissingApiKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Missing API key")
+    }
+}
+
+// Composite rejection — multiple failure modes for one extractor
+pub enum AuthRejection {
+    MissingHeader,
+    InvalidToken(String),
+    Expired,
+}
+
+impl IntoResponse for AuthRejection {
+    fn into_response(self) -> Response {
+        let (status, msg) = match self {
+            Self::MissingHeader => (StatusCode::UNAUTHORIZED, "missing authorization header"),
+            Self::InvalidToken(e) => (StatusCode::UNAUTHORIZED, "invalid token"),
+            Self::Expired => (StatusCode::UNAUTHORIZED, "token expired"),
+        };
+        (status, msg).into_response()
+    }
+}
+```
+
+**Key principle:** In axum, all services have `Error = Infallible`. Errors don't propagate — they become responses at the point of failure. This is fundamentally different from typical Rust error handling where errors bubble up with `?`.
+
 ## Actix Web
 
 ### Basic Server Setup

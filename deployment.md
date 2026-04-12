@@ -2227,6 +2227,92 @@ volumes:
   postgres_data:
 ```
 
+## Custom cfg Macros for Feature Flag Management (tokio Pattern)
+
+For crates with many feature flags, wrapping `#[cfg(...)]` + `#[cfg_attr(docsrs, ...)]` in macros eliminates repetition and ensures docs always show feature requirements. Tokio defines 69 such macros.
+
+### The Pattern
+
+```rust
+// src/macros/cfg.rs
+
+/// Gate items behind the "fs" feature with automatic docsrs annotation
+macro_rules! cfg_fs {
+    ($($item:item)*) => {
+        $(
+            #[cfg(feature = "fs")]
+            #[cfg_attr(docsrs, doc(cfg(feature = "fs")))]
+            $item
+        )*
+    }
+}
+
+macro_rules! cfg_net {
+    ($($item:item)*) => {
+        $(
+            #[cfg(feature = "net")]
+            #[cfg_attr(docsrs, doc(cfg(feature = "net")))]
+            $item
+        )*
+    }
+}
+
+// For unstable features gated behind custom cfg (not Cargo features)
+macro_rules! cfg_unstable {
+    ($($item:item)*) => {
+        $(
+            #[cfg(tokio_unstable)]
+            #[cfg_attr(docsrs, doc(cfg(tokio_unstable)))]
+            $item
+        )*
+    }
+}
+```
+
+### Usage
+
+```rust
+// src/lib.rs
+cfg_fs! {
+    pub mod fs;
+}
+
+cfg_net! {
+    pub mod net;
+}
+
+// In module files — gate individual functions
+cfg_fs! {
+    pub async fn read_to_string(path: impl AsRef<Path>) -> io::Result<String> {
+        // ...
+    }
+}
+```
+
+### Cargo.toml docs.rs Configuration
+
+```toml
+[package.metadata.docs.rs]
+# Enable all features + custom cfg flags for documentation
+all-features = true
+rustdoc-args = ["--cfg", "docsrs", "--cfg", "tokio_unstable"]
+```
+
+### Dead Code Suppression for Partially-Used Modules
+
+When a module is compiled but only partially used under certain features:
+
+```rust
+// Allow dead code when the "sync" feature is off
+#![cfg_attr(not(feature = "sync"), allow(unreachable_pub, dead_code))]
+```
+
+**When to use this pattern:**
+- Crates with 5+ feature flags
+- Public APIs where docs should show which feature enables each item
+- Crates with `tokio_unstable`-style custom cfg flags
+- NOT needed for crates with 1-2 features — inline `#[cfg(...)]` is fine
+
 ## Related Skills
 
 - **[SKILL.md](SKILL.md)** — Core Rust: cargo profiles, feature flags, build configuration

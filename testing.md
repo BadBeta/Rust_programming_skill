@@ -3141,6 +3141,195 @@ RUST_LOG=debug cargo test           # With logging
 | **Sequential for DB tests** | Use `--test-threads=1` for shared database |
 | **Feature-gate backends** | Conditionally compile tests needing specific services |
 
+## Loom Model Checking (Concurrency Testing)
+
+Loom exhaustively explores all thread interleavings to find concurrency bugs that random testing misses. Used by tokio (93 `loom::model` calls across 25 files) to verify every sync primitive.
+
+### Setup
+
+```toml
+# Cargo.toml
+[dev-dependencies]
+loom = "0.7"
+
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+```
+
+### The Loom Abstraction Layer (tokio pattern)
+
+Wrap all sync primitives through a module that swaps implementations under `#[cfg(loom)]`:
+
+```rust
+// src/loom.rs — the abstraction layer
+#[cfg(loom)]
+pub(crate) mod sync {
+    pub(crate) use loom::sync::atomic::{AtomicBool, AtomicUsize};
+    pub(crate) use loom::sync::{Arc, Mutex, RwLock, Condvar};
+    pub(crate) use loom::thread;
+}
+
+#[cfg(not(loom))]
+pub(crate) mod sync {
+    pub(crate) use std::sync::atomic::{AtomicBool, AtomicUsize};
+    pub(crate) use std::sync::{Arc, Mutex, RwLock, Condvar};
+    pub(crate) use std::thread;
+}
+```
+
+### Writing Loom Tests
+
+```rust
+#[cfg(loom)]
+#[test]
+fn test_notify_one() {
+    use loom::sync::Arc;
+    use loom::thread;
+
+    loom::model(|| {
+        let notify = Arc::new(MyNotify::new());
+        let notify2 = notify.clone();
+
+        let th = thread::spawn(move || {
+            notify2.wait();
+        });
+
+        notify.signal();
+        th.join().unwrap();
+    });
+}
+
+#[cfg(loom)]
+#[test]
+fn test_concurrent_counter() {
+    loom::model(|| {
+        let counter = loom::sync::Arc::new(loom::sync::atomic::AtomicUsize::new(0));
+        let c1 = counter.clone();
+        let c2 = counter.clone();
+
+        let t1 = loom::thread::spawn(move || {
+            c1.fetch_add(1, Ordering::SeqCst);
+        });
+        let t2 = loom::thread::spawn(move || {
+            c2.fetch_add(1, Ordering::SeqCst);
+        });
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
+    });
+}
+```
+
+### Reducing State Space
+
+Loom's exhaustive exploration explodes combinatorially. Keep state space manageable:
+
+```rust
+// Shrink constants under loom (tokio pattern)
+#[cfg(loom)]
+const QUEUE_CAPACITY: usize = 4;  // Normally 256
+
+#[cfg(not(loom))]
+const QUEUE_CAPACITY: usize = 256;
+```
+
+### Running Loom Tests
+
+```bash
+# Loom tests must be compiled with the loom cfg flag
+RUSTFLAGS="--cfg loom" cargo test --lib loom_  # Run tests with "loom_" prefix
+
+# Loom tests are slow — run separately from normal tests
+RUSTFLAGS="--cfg loom" cargo test -p my-sync-crate -- --test-threads=1
+```
+
+**When to use loom:**
+- Custom synchronization primitives (locks, channels, work-stealing queues)
+- Lock-free algorithms using atomics
+- Waker registration patterns
+- Any `unsafe impl Send/Sync` with manual synchronization
+
+**When NOT to use loom:**
+- Application-level async code — use `#[tokio::test]` instead
+- Code that only uses high-level tokio primitives (mpsc, Mutex)
+- Single-threaded code
+
+## Compile-Fail Tests (Type Safety Verification)
+
+Verify that invalid code correctly fails to compile. Used by rayon to ensure `Send`/`Sync` bounds catch misuse.
+
+### Using trybuild
+
+```toml
+# Cargo.toml
+[dev-dependencies]
+trybuild = "1"
+```
+
+```rust
+// tests/compile_fail.rs
+#[test]
+fn compile_fail_tests() {
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/compile_fail/*.rs");
+}
+```
+
+### Example Compile-Fail Tests (rayon pattern)
+
+```rust
+// tests/compile_fail/cell_par_iter.rs
+// Verify that Cell (not Sync) cannot be used in parallel iterators
+use rayon::prelude::*;
+use std::cell::Cell;
+
+fn main() {
+    let cell = Cell::new(0);
+    // This should fail: Cell is not Sync, can't be shared across threads
+    (0..100).into_par_iter().for_each(|_| {
+        cell.set(cell.get() + 1);  //~ ERROR
+    });
+}
+```
+
+```rust
+// tests/compile_fail/rc_par_iter.rs
+// Verify that Rc (not Send) cannot be used in parallel iterators
+use rayon::prelude::*;
+use std::rc::Rc;
+
+fn main() {
+    let data = Rc::new(vec![1, 2, 3]);
+    // This should fail: Rc is not Send, can't move across threads
+    (0..3).into_par_iter().for_each(|i| {
+        println!("{}", data[i]);  //~ ERROR
+    });
+}
+```
+
+### Using compile_fail in Doc Tests
+
+For simpler cases, use doc-test attributes:
+
+```rust
+/// A wrapper that enforces Send + Sync bounds.
+///
+/// ```compile_fail
+/// // Rc is not Send — this must not compile
+/// use std::rc::Rc;
+/// let wrapper = MyWrapper::new(Rc::new(42));
+/// std::thread::spawn(move || { wrapper.get(); });
+/// ```
+pub struct MyWrapper<T: Send + Sync>(T);
+```
+
+**When to use compile-fail tests:**
+- Libraries relying on `Send`/`Sync` bounds for safety
+- Type state patterns where invalid transitions must not compile
+- API boundaries where misuse should be a compile error
+- `unsafe impl Send/Sync` — verify the bounds actually catch violations
+
 ## Related Skills
 
 - **[SKILL.md](SKILL.md)** — Core Rust: error handling patterns, trait design for testability, `#[test]` basics

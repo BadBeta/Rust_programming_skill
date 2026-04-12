@@ -23,20 +23,20 @@ error handling, serde, tracing, macros, and production best practices. Current f
 | [database.md](database.md) | **SQLx** (compile-time queries, `query_as!`, connection pools, migrations), **Diesel** (schema DSL, associations), MongoDB, **caching** (in-memory with moka/dashmap, Redis with deadpool), query composition patterns |
 | [domain-patterns.md](domain-patterns.md) | DDD in Rust: entities, value objects (newtype), **aggregates**, domain events, **event sourcing** (state replay, snapshots, versioning), **CQRS** (command/query separation, read models, projections), bounded contexts as Cargo workspaces, anti-corruption layers |
 | [async-concurrency.md](async-concurrency.md) | Tokio runtime internals (work stealing, cooperative scheduling), **Pin/Unpin** explained, **channels** (mpsc, broadcast, watch, oneshot patterns), **rayon** for CPU-bound parallelism, **Tower** service pattern, actor patterns, structured concurrency, async closures (2024 ed.), graceful shutdown |
-| [error-handling.md](error-handling.md) | **thiserror/anyhow/color-eyre/miette** comparison, multi-layer error translation, error conversion chains across crate boundaries, production error reporting, recovery strategies |
-| [serde-serialization.md](serde-serialization.md) | Derive patterns with **all common attributes**, custom Serialize/Deserialize (Visitor pattern), **enum representations** (tagged, untagged, adjacently tagged), format-specific (JSON, TOML, bincode, CSV), zero-copy deserialization with `Cow<'a, str>` |
-| [web-apis.md](web-apis.md) | **Axum** (primary): extractors, middleware, routing, WebSocket, Tower integration. Actix Web, Rocket comparison. **Authentication** (JWT, Argon2, sessions), **sqlx integration**, reqwest HTTP client, CORS, static assets |
-| [testing.md](testing.md) | Unit/integration/E2E tests, **mockall** (mock traits, expectations), **insta** (snapshot testing), **proptest** (property-based), **cargo-fuzz** (fuzzing with arbitrary), async test patterns, database test fixtures, test organization |
-| [cli-tools.md](cli-tools.md) | **clap** derive and builder patterns, subcommands, value validation, shell completions. **indicatif** progress bars, **crossterm** terminal manipulation, **prettytable** output, file system operations, signal handling |
+| [error-handling.md](error-handling.md) | **thiserror/anyhow/color-eyre/miette** comparison, multi-layer error translation, error conversion chains across crate boundaries, production error reporting, recovery strategies, **hand-rolled Error+ErrorKind pattern** (ripgrep/tokio), **error-value recovery** (SendError\<T\>), **uninhabited error types** (NoError) |
+| [serde-serialization.md](serde-serialization.md) | Derive patterns with **all common attributes**, custom Serialize/Deserialize (Visitor pattern), **enum representations** (tagged, untagged, adjacently tagged), format-specific (JSON, TOML, bincode, CSV), zero-copy deserialization with `Cow<'a, str>`, **`DeserializeOwned` vs `Deserialize<'de>`** (lifetime distinction, three-tier string hierarchy) |
+| [web-apis.md](web-apis.md) | **Axum** (primary): extractors, middleware, routing, WebSocket, Tower integration. **Rejection pattern** (extractor error handling as responses). Actix Web, Rocket comparison. **Authentication** (JWT, Argon2, sessions), **sqlx integration**, reqwest HTTP client, CORS, static assets |
+| [testing.md](testing.md) | Unit/integration/E2E tests, **mockall** (mock traits, expectations), **insta** (snapshot testing), **proptest** (property-based), **cargo-fuzz** (fuzzing with arbitrary), async test patterns, database test fixtures, test organization, **loom model checking** (concurrency testing), **compile-fail tests** (trybuild, type safety verification) |
+| [cli-tools.md](cli-tools.md) | **clap** derive and builder patterns, subcommands, value validation, shell completions. **indicatif** progress bars, **crossterm** terminal manipulation, **prettytable** output, file system operations, signal handling, **non-fatal error accumulation** (atomic flag pattern for parallel processing), **lexopt** alternative for complex CLIs (ripgrep pattern) |
 | [macros.md](macros.md) | **Declarative macros** (macro_rules!, repetition, TT muncher), **procedural macros** (TokenStream, syn, quote), **derive macros** (parsing struct/enum), **attribute macros**, when to use macros vs generics vs traits, real production macro examples |
-| [unsafe-ffi.md](unsafe-ffi.md) | Unsafe blocks, safety contracts, raw pointers. **FFI with C** (bindgen, cbindgen, `repr(C)`), CString/CStr, byte manipulation, endianness, network protocol parsing |
-| [deployment.md](deployment.md) | Cargo profiles (LTO, codegen-units, strip, panic), **Docker multi-stage builds** (distroless images), **CI/CD** (GitHub Actions, GitLab CI), cross-compilation targets, structured logging with **tracing** (subscribers, layers, JSON output), metrics (prometheus, opentelemetry) |
+| [unsafe-ffi.md](unsafe-ffi.md) | Unsafe blocks, safety contracts, raw pointers. **FFI with C** (bindgen, cbindgen, `repr(C)`), CString/CStr, byte manipulation, endianness, network protocol parsing, **AbortIfPanic guard** (rayon pattern for critical unsafe sections) |
+| [deployment.md](deployment.md) | Cargo profiles (LTO, codegen-units, strip, panic), **Docker multi-stage builds** (distroless images), **CI/CD** (GitHub Actions, GitLab CI), cross-compilation targets, structured logging with **tracing** (subscribers, layers, JSON output), metrics (prometheus, opentelemetry), **custom cfg macros for feature flag management** (tokio pattern) |
 | [data-structures.md](data-structures.md) | Rust-specific data structure patterns (Vec, HashMap, BTreeMap, VecDeque, BinaryHeap), algorithm implementations, **benchmarking** (criterion), **profiling** (flamegraph, perf, DHAT), memory profiling, optimization patterns (SmallVec, arrayvec, indexmap) |
 | [gui-wasm.md](gui-wasm.md) | **egui** (immediate mode), **iced** (Elm architecture), **Leptos/Yew** (web frontend), **WASM** (wasm-bindgen, wasm-pack, WASI), server-side Wasm, JS interop patterns |
 | [services.md](services.md) | Microservices patterns (kernel pattern, feature-gated adapters), **service discovery** (Kubernetes, kube-rs), **Redis** caching and job queues, **resilience** (circuit breakers, retries, backoff, idempotency), CAP theorem, TCP server/client, TLS (rustls) |
-| [language-patterns.md](language-patterns.md) | Everyday Rust idioms between SKILL.md basics and advanced type-system features. **Pattern matching extended** (match ergonomics, let-else, if-let chains, or-patterns), **ownership patterns** (borrow splitting, Cow\<T\>, zero-copy, entry API), **? operator chains** with context, **iterator composition** (custom iterators, IntoIterator, lazy evaluation), **closure capture semantics** (Fn/FnMut/FnOnce), **trait patterns** (extension traits, blanket impls, orphan rule), **From/Into/AsRef** conversion hierarchy, **RAII & Drop**, module organization & visibility, conditional compilation, production patterns (config, graceful shutdown, retry, middleware) |
+| [language-patterns.md](language-patterns.md) | Everyday Rust idioms between SKILL.md basics and advanced type-system features. **Pattern matching extended** (match ergonomics, let-else, if-let chains, or-patterns), **ownership patterns** (borrow splitting, Cow\<T\>, zero-copy, entry API), **? operator chains** with context, **iterator composition** (custom iterators, IntoIterator, lazy evaluation), **closure capture semantics** (Fn/FnMut/FnOnce), **trait patterns** (extension traits, blanket impls, orphan rule), **From/Into/AsRef** conversion hierarchy, **RAII & Drop**, module organization & visibility, conditional compilation, production patterns (config, graceful shutdown, retry, middleware), **internal iteration** (push-based callbacks, Producer/Consumer/Folder pattern from rayon) |
 | [documentation.md](documentation.md) | **Rustdoc** conventions, doc comments (`///`, `//!`), **doc test** attributes (`no_run`, `compile_fail`, `should_panic`, hidden lines), **intra-doc links** (`[`Type`]`, `[`Type::method`]`), standard sections (`# Examples`, `# Errors`, `# Panics`, `# Safety`), **feature-gated docs** (`doc(cfg(...))`), `#[doc(hidden)]`/`#[doc(inline)]`, `include_str!` for external docs, **docs.rs** configuration, lints (`missing_docs`, `broken_intra_doc_links`), badge patterns, crate documentation architecture |
-| [type-system.md](type-system.md) | **Trait patterns** (extension traits, blanket impls, orphan rule, object safety, supertraits), **type conversions** (From/Into/TryFrom/AsRef/Deref hierarchy, conversion decision guide), **type state pattern** deep dive (builder, protocol state machine), **GATs** (lending iterator, generic collection, type-parameterized), **const generics** (matrix, fixed buffer, defaults), **Pin/Unpin** (futures internals, pin projection, pin-project-lite), **async traits** (native vs async-trait, RPITIT, Rust 2024 capture rules), **sealed traits**, **lifetime patterns** (variance, PhantomData, HRTBs) |
+| [type-system.md](type-system.md) | **Trait patterns** (extension traits, blanket impls, orphan rule, object safety, supertraits), **type conversions** (From/Into/TryFrom/AsRef/Deref hierarchy, conversion decision guide), **type state pattern** deep dive (builder, protocol state machine), **GATs** (lending iterator, generic collection, type-parameterized), **const generics** (matrix, fixed buffer, defaults), **Pin/Unpin** (futures internals, pin projection, pin-project-lite), **async traits** (native vs async-trait, RPITIT, Rust 2024 capture rules), **sealed traits**, **lifetime patterns** (variance, PhantomData, HRTBs), **marker type parameters for coherence** (axum pattern), **diagnostic attributes** (`do_not_recommend`, `on_unimplemented`), **compile-time trait bound assertions** |
 | [quick-reference.md](quick-reference.md) | Extended std/crate function reference (~300 methods): String, Vec, HashMap, Iterator, Option, Result, File/Path, formatting, **common trait implementations** (Display, FromStr, From/Into, AsRef, Deref, Index, IntoIterator, Drop), **macros** (std library, cfg, derive, attributes), chrono, regex, reqwest, tracing, clap, uuid, base64, anyhow/thiserror |
 
 ## Rules for Writing Rust Code (LLM)
@@ -45,8 +45,8 @@ error handling, serde, tracing, macros, and production best practices. Current f
 2. **ALWAYS propagate errors with `?` operator** for straightforward propagation. Add context with `.map_err()` or `anyhow::Context` when crossing module boundaries. Use explicit `match` when you need different logic per branch, not just to re-wrap and propagate.
 3. **PREFER borrowing over cloning.** Take `&str` for read-only string params, `&[T]` for read-only slices. Use `impl Into<String>` or `impl AsRef<str>` for flexible public APIs (as clap and axum do). Take ownership when the function needs to store or move the data (builders, async tasks, struct fields).
 4. **ALWAYS use iterators over manual index loops.** Prefer `.iter()`, `.map()`, `.filter()`, `.collect()` over `for i in 0..len`. Iterator chains are zero-cost abstractions and prevent off-by-one errors. Exception: manual indexing is appropriate for unsafe pointer arithmetic, circular buffer manipulation, or simultaneous multi-array traversal with complex index relationships.
-5. **ALWAYS derive `Debug` on public types.** Derive `Clone` unless the type owns a unique resource (file handle, connection, runtime). Derive `PartialEq` when meaningful — omit on types containing closures, trait objects, or I/O resources. Derive `serde::Serialize`/`Deserialize` for types crossing serialization boundaries. Use `#[non_exhaustive]` on public enums.
-6. **PREFER `thiserror` for library error types and `anyhow` for application error handling.** Many major libraries (tokio, axum, hyper) use manual `impl Display + impl Error` for full control — both approaches are valid. Never use `Box<dyn Error>` in public APIs. Define specific error variants, not catch-all strings.
+5. **ALWAYS derive `Debug` on public types.** Derive `Clone` unless the type owns a unique resource (file handle, connection, runtime). Derive `PartialEq` when meaningful — omit on types containing closures, trait objects, or I/O resources. Derive `serde::Serialize`/`Deserialize` for types crossing serialization boundaries. Use `#[non_exhaustive]` on public enums and error types — this allows adding variants without breaking downstream callers (used by ripgrep, tokio, serde).
+6. **PREFER `thiserror` for library error types and `anyhow` for application error handling.** Many major libraries (tokio, axum, hyper, ripgrep, serde) hand-roll `impl Display + impl Error` for full control over formatting, `#[non_exhaustive]`, and patterns like `Error { kind: ErrorKind }` wrappers — both approaches are valid and production-proven. Never use `Box<dyn Error>` in public APIs. Define specific error variants, not catch-all strings.
 7. **NEVER use `String` for error messages in `Result`.** Use typed errors (`Result<T, MyError>`) so callers can match on variants. String errors lose information and prevent programmatic handling.
 8. **ALWAYS mark long-running or I/O operations as `async`** when in an async context. Never block the async runtime with `std::thread::sleep()` or synchronous I/O — use `tokio::time::sleep()` and async equivalents. Use `tokio::task::spawn_blocking()` for unavoidable blocking operations.
 9. **Use appropriate synchronization for shared mutable state.** `Arc<Mutex<T>>` for simple cases, `Arc<RwLock<T>>` when reads vastly outnumber writes, `dashmap` for concurrent maps, `parking_lot::Mutex` for better performance. Use `std::sync::Mutex` (not `tokio::sync::Mutex`) unless you need to hold the lock across `.await` points. Never use `Rc<RefCell<T>>` across thread or `.await` boundaries (it is `!Send`).
@@ -1873,6 +1873,40 @@ fn transfer(from: &Arc<Account>, to: &Arc<Account>, amount: f64) {
     } else {
         *second_lock -= amount; *first_lock += amount;
     }
+}
+```
+
+**Public error enum without `#[non_exhaustive]`:**
+```rust
+// BAD: adding a variant is a breaking change for downstream match arms
+#[derive(Debug)]
+pub enum ErrorKind {
+    Io(std::io::Error),
+    Parse(String),
+}
+
+// GOOD: #[non_exhaustive] allows adding variants without breaking callers (ripgrep pattern)
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ErrorKind {
+    Io(std::io::Error),
+    Parse(String),
+}
+// Callers MUST use `_ =>` wildcard arm — new variants won't break them
+```
+
+**Channel send losing the unsent value:**
+```rust
+// BAD: value is dropped on send failure — caller loses the data
+fn send(tx: &Sender<Message>, msg: Message) -> Result<(), Error> {
+    tx.send(msg).map_err(|_| Error::Closed)?;
+    Ok(())
+}
+
+// GOOD: return the value in the error so caller can retry or save (tokio pattern)
+pub struct SendError<T>(pub T);
+impl<T> SendError<T> {
+    pub fn into_inner(self) -> T { self.0 }
 }
 ```
 

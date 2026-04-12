@@ -2206,6 +2206,84 @@ trait Visitor<'de>: Sized {
 - The set of element types is stable but operations change frequently
 - **When NOT:** if the set of operations is stable but types change, use enum + match instead
 
+## Internal Iteration (Push-Based Callbacks)
+
+The standard iterator model (external/pull) returns items one at a time. Some performance-sensitive APIs use **internal iteration** (push-based) where the producer drives callbacks instead. This is the pattern used by ripgrep's `Matcher` and `Sink` traits, and by rayon's `Producer`/`Consumer` plumbing.
+
+### When Push Beats Pull
+
+```rust
+// PULL (external iteration) — caller drives
+trait PullMatcher {
+    // Returns an iterator of matches — must express complex lifetimes
+    fn find_iter<'h>(&self, haystack: &'h [u8]) -> impl Iterator<Item = Match> + 'h;
+}
+
+// PUSH (internal iteration) — producer drives via callbacks
+trait PushMatcher {
+    type Error;
+    // Calls sink methods for each match — simpler lifetime story
+    fn find_at(&self, haystack: &[u8], at: usize) -> Result<Option<Match>, Self::Error>;
+}
+
+// PUSH consumer (Sink pattern from ripgrep)
+trait Sink {
+    type Error;
+    fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error>;
+    fn finish(&mut self, searcher: &Searcher, sink_finish: &SinkFinish) -> Result<(), Self::Error>;
+}
+```
+
+### Why ripgrep Uses Push-Based
+
+ripgrep's `Matcher::find_at` uses push-based callbacks because:
+1. **Regex engines vary** — some can't easily express external iteration generically
+2. **Lifetime complexity** — returning iterators that borrow from both the matcher and haystack requires complex GATs or boxing
+3. **Performance** — push-based avoids the overhead of iterator state machines for hot paths
+4. **Control flow** — the `Sink::matched` return value (`bool`) lets the consumer stop iteration early
+
+### The Producer/Consumer Pattern (rayon)
+
+Rayon's parallel iteration uses a trait decomposition for divide-and-conquer:
+
+```rust
+// Producer: can split work into two halves
+trait Producer: Send + Sized {
+    type Item;
+    type IntoIter: Iterator<Item = Self::Item> + DoubleEndedIterator + ExactSizeIterator;
+    fn split_at(self, index: usize) -> (Self, Self);
+    fn into_iter(self) -> Self::IntoIter;
+}
+
+// Consumer: receives and processes items, can be split to match producer
+trait Consumer<Item>: Send + Sized {
+    type Folder: Folder<Item>;
+    type Reducer: Reducer<Self::Folder::Result>;
+    type Result;
+    fn split_at(self, index: usize) -> (Self, Self, Self::Reducer);
+    fn into_folder(self) -> Self::Folder;
+}
+
+// Folder: sequential processing state (accumulator)
+trait Folder<Item>: Sized {
+    type Result;
+    fn consume(self, item: Item) -> Self;
+    fn complete(self) -> Self::Result;
+    fn full(&self) -> bool;  // early termination
+}
+```
+
+**When to use push-based/internal iteration:**
+- Performance-critical search/scan operations
+- When external iteration would require complex lifetime bounds or boxing
+- Parallel algorithms with divide-and-conquer (rayon's model)
+- When the consumer needs early termination control
+
+**When to use standard iterators:**
+- Most application code — external iteration is more composable
+- When you need to chain `.map()`, `.filter()`, `.collect()` etc.
+- When lifetime complexity is manageable
+
 ## Related Skills
 
 - **[SKILL.md](SKILL.md)** — Core Rust: ownership, traits, error handling, iterators, serde, async

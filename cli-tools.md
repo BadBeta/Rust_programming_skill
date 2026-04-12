@@ -1677,9 +1677,108 @@ struct Cli {
 | `ctrlc` | Signal handling (sync) |
 | `anyhow` | Error handling with context |
 
+## Non-Fatal Error Accumulation in Parallel Processing
+
+For CLI tools that process many files/items in parallel, individual failures shouldn't stop everything. Use an atomic flag to track whether any errors occurred, affecting the exit code.
+
+### The ripgrep Pattern
+
+```rust
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Global flag set when any non-fatal error occurs during processing
+static ERRORED: AtomicBool = AtomicBool::new(false);
+
+/// Print an error to stderr and mark that an error occurred
+macro_rules! err_message {
+    ($($arg:tt)*) => {{
+        eprintln!("error: {}", format_args!($($arg)*));
+        ERRORED.store(true, Ordering::Relaxed);
+    }};
+}
+
+fn search_file(path: &Path) -> Option<SearchResult> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            // ... search logic ...
+            Some(result)
+        }
+        Err(e) => {
+            // Non-fatal: log and continue to next file
+            err_message!("{}: {}", path.display(), e);
+            None
+        }
+    }
+}
+
+fn main() -> ExitCode {
+    let results = files.par_iter()
+        .filter_map(|f| search_file(f))
+        .collect::<Vec<_>>();
+
+    // Exit code reflects whether ANY errors occurred
+    if ERRORED.load(Ordering::Relaxed) {
+        ExitCode::from(2)  // Partial failure
+    } else if results.is_empty() {
+        ExitCode::from(1)  // No matches
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+```
+
+**When to use:** File processors, search tools, linters, formatters — anything that operates on many inputs where individual failures are expected (permission denied, encoding errors, broken symlinks).
+
+## Alternative CLI Parsers: lexopt for Complex Tools
+
+While clap is the standard, tools with complex documentation needs (man pages, shell completions from a single source) may benefit from `lexopt` + a custom trait system. ripgrep uses this approach for 100+ flags.
+
+```toml
+# Cargo.toml — minimal dependency, zero proc macros
+[dependencies]
+lexopt = "0.3"
+```
+
+```rust
+use lexopt::prelude::*;
+
+// Each flag is a unit struct implementing a common trait
+trait Flag: Send + Sync + 'static {
+    fn name_long(&self) -> &'static str;
+    fn name_short(&self) -> Option<u8> { None }
+    fn doc_short(&self) -> &'static str;
+    fn update(&self, value: lexopt::Arg, args: &mut LowArgs) -> anyhow::Result<()>;
+    // Man page, shell completions, etc. all from the same trait
+}
+
+// Two-stage parsing: LowArgs (raw values) → HiArgs (compiled types)
+struct LowArgs {
+    patterns: Vec<String>,
+    paths: Vec<PathBuf>,
+    case_insensitive: bool,
+    // ... raw validated values
+}
+
+struct HiArgs {
+    matcher: CompiledMatcher,    // Expensive: compiled regex
+    walker: FileWalker,          // Expensive: glob patterns compiled
+    printer: OutputPrinter,      // Configured from flags
+}
+```
+
+**When to prefer lexopt over clap:**
+- 50+ flags where a single trait drives help, man pages, AND shell completions
+- Need custom help formatting not achievable with clap
+- Want zero proc-macro compile time
+
+**When to stick with clap:**
+- Most CLI tools (< 30 flags)
+- Rapid prototyping
+- Subcommand-heavy tools
+
 ## Related Skills
 
 - **[SKILL.md](SKILL.md)** — Core Rust: error handling, serde, iterators, pattern matching
-- **[error-handling.md](error-handling.md)** — `color-eyre` for CLI error display, `anyhow` context chains
+- **[error-handling.md](error-handling.md)** — `color-eyre` for CLI error display, `anyhow` context chains, error-value recovery
 - **[serde-serialization.md](serde-serialization.md)** — Config file parsing, TOML/JSON/YAML deserialization
 - **[testing.md](testing.md)** — `assert_cmd` for CLI integration testing, `tempfile` for fixtures

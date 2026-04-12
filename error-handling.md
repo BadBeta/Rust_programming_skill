@@ -4,7 +4,7 @@ Comprehensive patterns for error handling including Result/Option, custom error 
 
 ## Rules for Error Handling (LLM)
 
-1. **ALWAYS use `thiserror` for library error types** — libraries must expose typed errors that callers can pattern match on; never use `anyhow::Error` in a library's public API
+1. **PREFER `thiserror` for library error types, hand-rolled `impl Display + Error` for maximum control** — libraries must expose typed errors that callers can pattern match on; never use `anyhow::Error` in a library's public API. Major libraries (tokio, ripgrep, serde, hyper) hand-roll all error types for full control over formatting, `#[non_exhaustive]`, and `Error { kind: ErrorKind }` wrapper patterns
 2. **ALWAYS use `anyhow` or `color-eyre` for application error handling** — applications benefit from context chaining (`.context()`) and type erasure; don't define custom error enums in `main.rs`
 3. **ALWAYS attach context to errors with `.context()` or `.wrap_err()`** — bare `?` loses the call site; `fs::read(path).context("reading config")?` tells you *what* failed, not just *how*
 4. **NEVER use `.unwrap()` in production code paths** — use `.expect("reason")` for invariants, `?` for propagation, or `.unwrap_or_default()` for fallbacks
@@ -1358,10 +1358,155 @@ Choose based on who sees the error:
 - **Users** (CLI tools) → `color-eyre`
 - **Users + source context** (compilers, linters) → `miette`
 
+## Hand-Rolled Error Types (The ripgrep/tokio Pattern)
+
+Many top-tier libraries avoid `thiserror` entirely and hand-roll error types for full control. This is the dominant pattern in ripgrep (8 error types), tokio, serde, and hyper.
+
+### The Error + ErrorKind Wrapper Pattern
+
+```rust
+use std::fmt;
+
+/// Public error type — thin wrapper around ErrorKind
+#[derive(Clone, Debug)]
+pub struct Error {
+    kind: ErrorKind,
+}
+
+/// Non-exhaustive enum allows adding variants without breaking callers
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum ErrorKind {
+    /// A regex pattern could not be compiled.
+    Regex(String),
+    /// A feature is not allowed in this context.
+    NotAllowed(String),
+    /// An invalid line terminator was specified.
+    InvalidLineTerminator(u8),
+}
+
+impl std::error::Error for Error {}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.kind {
+            ErrorKind::Regex(msg) => write!(f, "regex error: {msg}"),
+            ErrorKind::NotAllowed(msg) => write!(f, "not allowed: {msg}"),
+            ErrorKind::InvalidLineTerminator(b) => {
+                write!(f, "invalid line terminator: {b:#04x}")
+            }
+        }
+    }
+}
+
+impl Error {
+    /// Access the error kind for pattern matching.
+    pub fn kind(&self) -> &ErrorKind { &self.kind }
+}
+
+impl From<ErrorKind> for Error {
+    fn from(kind: ErrorKind) -> Self { Error { kind } }
+}
+```
+
+**Advantages over thiserror:**
+- Full control over `Display` formatting (no macro-generated strings)
+- `#[non_exhaustive]` on `ErrorKind` — callers must use wildcard arms
+- The `Error` wrapper can carry extra context (path, line number, depth) without changing the enum
+- No proc-macro dependency — faster compilation
+
+**When to use which:**
+
+| Approach | Use When |
+|----------|----------|
+| `thiserror` | New libraries, simple error enums, want less boilerplate |
+| Hand-rolled | Complex formatting, `#[non_exhaustive]`, extra context fields, zero proc-macro deps |
+| `Error { kind: ErrorKind }` wrapper | Need to add context (file path, depth) to any error variant |
+
+### Uninhabited Error Types
+
+For traits where some implementations can never fail (e.g., in-memory matchers), use an error type that cannot be constructed:
+
+```rust
+/// An error that can never occur (used as associated error type).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NoError(());
+
+impl std::fmt::Display for NoError {
+    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        panic!("BUG: NoError should never be constructed")
+    }
+}
+
+impl std::error::Error for NoError {}
+
+// In a trait implementation:
+impl Matcher for ExactMatcher {
+    type Error = NoError;  // This matcher never fails
+    // ...
+}
+```
+
+## Error-Value Recovery Pattern (tokio Pattern)
+
+When a fallible operation takes ownership of a value (channel send, buffer write), return the value inside the error so the caller doesn't lose it:
+
+```rust
+/// Error returned when a send operation fails because the receiver was dropped.
+/// The unsent message is returned so the caller can retry, log, or save it.
+#[derive(Debug)]
+pub struct SendError<T>(pub T);
+
+impl<T> SendError<T> {
+    /// Consume the error, returning the unsent value.
+    pub fn into_inner(self) -> T { self.0 }
+}
+
+impl<T> fmt::Display for SendError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "channel closed")
+    }
+}
+
+/// For try-send, distinguish between full and closed.
+#[derive(Debug)]
+pub enum TrySendError<T> {
+    /// Channel is full — value returned, caller can retry later.
+    Full(T),
+    /// Receiver dropped — value returned, channel is permanently closed.
+    Closed(T),
+}
+
+impl<T> TrySendError<T> {
+    pub fn into_inner(self) -> T {
+        match self { Self::Full(v) | Self::Closed(v) => v }
+    }
+}
+
+// Usage: caller recovers the value on failure
+match tx.try_send(expensive_message) {
+    Ok(()) => {}
+    Err(TrySendError::Full(msg)) => {
+        // Buffer is full — save to disk instead of losing the message
+        save_to_overflow_queue(msg);
+    }
+    Err(TrySendError::Closed(msg)) => {
+        tracing::warn!("receiver dropped, saving last message");
+        save_to_overflow_queue(msg);
+    }
+}
+```
+
+**When to use this pattern:**
+- Channel send operations (mpsc, broadcast, oneshot)
+- Buffer/queue insertion that takes ownership
+- Any fallible operation where the caller needs the value back on failure
+- NOT needed when the function borrows rather than owns the data
+
 ## Related Skills
 
 - **[SKILL.md](SKILL.md)** — Core Rust: `Result`/`Option`, `?` operator, error design essentials
 - **[architecture.md](architecture.md)** — Multi-layer error translation, domain vs infrastructure errors
-- **[web-apis.md](web-apis.md)** — HTTP error mapping, `IntoResponse` for error types
+- **[web-apis.md](web-apis.md)** — HTTP error mapping, `IntoResponse` for error types, rejection pattern
 - **[language-patterns.md](language-patterns.md)** — `?` operator chains with `.context()`, error propagation patterns
 - **[testing.md](testing.md)** — Testing error paths, `assert!(matches!(result, Err(...)))` patterns

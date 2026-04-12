@@ -1994,6 +1994,117 @@ fn usage() {
 }
 ```
 
+## Marker Type Parameters for Trait Coherence (axum Pattern)
+
+When blanket trait impls would violate coherence rules, use phantom type parameters as disambiguation tokens. This is a critical pattern for framework authors.
+
+### The Problem
+
+```rust
+// You want FromRequest to work for both "extract from parts" and "extract from body"
+// But this blanket impl conflicts with specific impls:
+impl<S, T: FromRequestParts<S>> FromRequest<S> for T { ... }  // Conflicts!
+impl<S> FromRequest<S> for Json<Value> { ... }                 // Can't have both
+```
+
+### The Solution: Marker Types
+
+```rust
+// Private marker types — never constructed, only used as type parameters
+mod private {
+    pub enum ViaParts {}
+    pub enum ViaRequest {}
+}
+
+// The trait takes a marker parameter M
+pub trait FromRequest<S, M = private::ViaRequest>: Sized {
+    type Rejection: IntoResponse;
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection>;
+}
+
+// Blanket impl uses ViaParts marker — no conflict with ViaRequest impls
+impl<S, T> FromRequest<S, private::ViaParts> for T
+where
+    T: FromRequestParts<S>,
+{
+    type Rejection = T::Rejection;
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let (mut parts, _body) = req.into_parts();
+        T::from_request_parts(&mut parts, state).await
+    }
+}
+
+// Specific impl uses default ViaRequest marker — no conflict
+impl<S, T: DeserializeOwned> FromRequest<S> for Json<T> {
+    type Rejection = JsonRejection;
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        // consume body...
+        todo!()
+    }
+}
+```
+
+Similarly, axum's `Handler<T, S>` uses `T` as a tuple encoding the handler's parameter types to disambiguate between `Fn(A) -> X` and `Fn(A, B) -> Y` for the same type `F`.
+
+**When to use this pattern:**
+- Framework code with blanket impls that would violate orphan/coherence rules
+- Trait families where one trait should bridge to another
+- NOT for application code — this is advanced framework machinery
+
+## Diagnostic Attributes for Better Compiler Errors
+
+### `#[diagnostic::do_not_recommend]`
+
+Prevents the compiler from suggesting a blanket impl when it's not what the user intended (stabilized in Rust 1.78):
+
+```rust
+// Without this, rustc might suggest implementing FromRequestParts
+// when the user actually needs FromRequest
+#[diagnostic::do_not_recommend]
+impl<S, T> FromRequest<S, private::ViaParts> for T
+where
+    T: FromRequestParts<S>,
+{ ... }
+```
+
+### `#[diagnostic::on_unimplemented]`
+
+Custom error messages when a trait bound isn't satisfied:
+
+```rust
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a valid handler",
+    note = "handler functions must return a type that implements `IntoResponse`",
+    label = "this function is not a valid handler"
+)]
+pub trait Handler<T, S>: Clone + Send + Sync + 'static { ... }
+```
+
+**When to use:**
+- Traits in public library APIs where users will see confusing error messages
+- Blanket impls that shouldn't be suggested as fixes
+- Any trait where `impl Trait for MyType` is a common user action
+
+## Compile-Time Trait Bound Assertions (axum/tokio pattern)
+
+Verify that key types satisfy required bounds without runtime cost:
+
+```rust
+#[cfg(test)]
+fn assert_send<T: Send>() {}
+#[cfg(test)]
+fn assert_sync<T: Sync>() {}
+
+#[test]
+fn traits() {
+    assert_send::<Router<()>>();
+    assert_sync::<Router<()>>();
+    assert_send::<Request>();
+}
+```
+
+This catches regressions where a refactor accidentally makes a type `!Send` or `!Sync`.
+
 ## Related Skills
 
 - **[SKILL.md](SKILL.md)** — Core Rust: ownership, traits basics, error handling, iterators, pattern matching
@@ -2001,3 +2112,4 @@ fn usage() {
 - **[async-concurrency.md](async-concurrency.md)** — Async runtime, tokio, channels, concurrent patterns
 - **[architecture.md](architecture.md)** — Workspace design, DI, application layering
 - **[macros.md](macros.md)** — Declarative and procedural macros
+- **[testing.md](testing.md)** — Compile-fail tests for verifying type bounds catch misuse

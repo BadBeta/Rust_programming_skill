@@ -987,6 +987,65 @@ fn deserialize_port<'de, D: Deserializer<'de>>(d: D) -> Result<u16, D::Error> {
 // Accepts both: {"port": 8080} and {"port": "8080"}
 ```
 
+## `DeserializeOwned` vs `Deserialize<'de>` — The Lifetime Distinction
+
+This distinction is critical for API design and affects whether deserialized data can borrow from the input buffer.
+
+```rust
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+
+// DeserializeOwned = for<'de> Deserialize<'de>
+// The deserialized type owns all its data — no borrowing from input
+fn parse_from_reader<T: DeserializeOwned>(reader: impl std::io::Read) -> Result<T, serde_json::Error> {
+    // Reader consumes input — nothing to borrow from
+    serde_json::from_reader(reader)
+}
+
+// Deserialize<'de> — the deserialized type MAY borrow from the input
+fn parse_from_str<'de, T: Deserialize<'de>>(input: &'de str) -> Result<T, serde_json::Error> {
+    // input lives for 'de — T can borrow &'de str from it (zero-copy)
+    serde_json::from_str(input)
+}
+```
+
+### When to Use Which
+
+| Bound | Use When | Example |
+|-------|----------|---------|
+| `DeserializeOwned` | Reading from streams, readers, network | `from_reader`, `reqwest::Response::json()` |
+| `Deserialize<'de>` | Input is in memory, want zero-copy option | `from_str`, `from_slice` |
+| `Deserialize<'de>` with `#[serde(borrow)]` | Fields are `&'de str` or `Cow<'de, str>` | Log parsers, high-throughput JSON |
+
+### The Three-Tier String Hierarchy in serde's Visitor
+
+Serde's Visitor trait has three levels for string deserialization:
+
+```rust
+trait Visitor<'de> {
+    // 1. Zero-copy: borrows directly from input buffer
+    fn visit_borrowed_str(self, v: &'de str) -> Result<Self::Value, E> {
+        self.visit_str(v)  // default: falls back to ephemeral borrow
+    }
+
+    // 2. Ephemeral borrow: valid only during this call
+    fn visit_str(self, v: &str) -> Result<Self::Value, E> {
+        Err(E::invalid_type(...))  // default: reject
+    }
+
+    // 3. Owned: caller gives you a String
+    fn visit_string(self, v: String) -> Result<Self::Value, E> {
+        self.visit_str(&v)  // default: borrow from the String
+    }
+}
+```
+
+**How `Cow<'de, str>` leverages this:** When deserializing `Cow<'de, str>`:
+- Unescaped strings → `visit_borrowed_str` → `Cow::Borrowed` (zero-copy)
+- Escaped strings → `visit_string` → `Cow::Owned` (must allocate to unescape)
+
+This is why `Cow<'a, str>` is preferred over `String` in deserialization-heavy types — it avoids allocation when the input doesn't need transformation.
+
 ## Related Skills
 
 - **[SKILL.md](SKILL.md)** — Core Rust: serde essentials, derive basics, common attributes
