@@ -1,3 +1,5 @@
+# This has been superseded by [rust-phase-skills](https://github.com/BadBeta/rust-phase-skills)
+
 # Rust Programming Skill
 
 A comprehensive Claude Code skill for idiomatic Rust development. Covers ownership, traits, generics, async/await, error handling, serde, tracing, macros, design patterns, and production best practices. Current for Rust 2024 edition.
